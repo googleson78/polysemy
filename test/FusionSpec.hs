@@ -8,12 +8,14 @@ module FusionSpec where
 
 import qualified Control.Monad.Trans.Except as E
 import qualified Control.Monad.Trans.State.Strict as S
+import           Polysemy
 import           Polysemy.Error
 import           Polysemy.Internal
 import           Polysemy.Internal.Combinators
 import           Polysemy.Internal.Effect
 import           Polysemy.Internal.Union
 import           Polysemy.State
+import           Polysemy.Reader
 import           Test.Hspec
 import           Test.Inspection
 
@@ -31,6 +33,7 @@ spec = do
   describe "fusion" $ do
     it "Union proofs should simplify" $ do
       shouldSucceed $(inspectTest $ 'countDown `hasNoType` ''SNat)
+      shouldSucceed $(inspectTest $ 'countDownWithReader `hasNoType` ''SNat)
 
     it "internal uses of StateT should simplify" $ do
       shouldSucceed $(inspectTest $ 'countDown `doesNotUse` ''S.StateT)
@@ -73,4 +76,32 @@ countDown start = fst $ run $ runState start go
 
 jank :: Int -> Int
 jank start = fst $ run $ runState start $ go
+
+-- Like go, but add the reader value every step of the way.
+goReader :: (Member (State Int) r, Member (Reader Int) r)
+         => Sem r Int
+goReader = do
+  n <- get
+  m <- ask
+  if n <= 0
+     then pure n
+     else do
+       put $ m + (n-1)
+       goReader
+
+-- Like countDown, but have some random reader effect mixed in.
+countDownWithReader :: Int -> Int
+countDownWithReader start
+  = fst $ run
+  $ runState start
+  $ runReader start
+  $ interceptH (help start) goReader
+  where
+    help :: forall x m r.
+            (Member (State Int) r, Member (Reader Int) r)
+         => Int -> Reader Int m x -> Tactical (Reader Int) m r x
+    help i Ask = pureT 42
+    help i (Local f m) = do
+      mm <- runT m
+      raise $ runReader (f 42) mm
 
